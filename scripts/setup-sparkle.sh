@@ -55,10 +55,15 @@ done
 LOCK_HELD=1
 echo "$$" > "$LOCK_DIR/pid"
 
-# A run killed mid-publish can leave a backup behind; nothing else can be
-# mid-publish while we hold the lock, so anything matching is stale.
+# Restore a cache moved aside by an interrupted publish before discarding
+# old backups, so a completed cache remains available offline.
 for leftover in "${DEST}".bak.*; do
-  [[ -e "$leftover" ]] && rm -rf "$leftover"
+  [[ -e "$leftover" ]] || continue
+  if [[ ! -e "$DEST" && -f "$leftover/Sparkle.framework/Sparkle" && -x "$leftover/bin/sign_update" ]]; then
+    mv "$leftover" "$DEST"
+  else
+    rm -rf "$leftover"
+  fi
 done
 
 framework_ok() {

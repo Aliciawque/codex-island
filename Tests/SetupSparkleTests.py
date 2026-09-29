@@ -213,6 +213,28 @@ class SetupSparkleTests(unittest.TestCase):
         self.assert_installed()
         self.assertEqual(self.downloads.read_text().splitlines(), ["download"])
 
+    def test_interrupted_publish_restores_complete_cache_offline(self):
+        self.assertEqual(self.setup_sparkle().returncode, 0)
+        backup = self.root / "Vendor/Sparkle.bak.99999999"
+        self.dest.rename(backup)
+        self.archive.unlink()
+        result = self.setup_sparkle()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_installed()
+        self.assertFalse(backup.exists())
+        self.assertEqual(self.downloads.read_text().splitlines(), ["download"])
+
+    def test_completed_publish_keeps_new_cache_and_discards_old_backup(self):
+        self.assertEqual(self.setup_sparkle().returncode, 0)
+        backup = self.root / "Vendor/Sparkle.bak.99999999"
+        shutil.copytree(self.dest, backup)
+        (backup / "Sparkle.framework/Sparkle").write_bytes(b"old framework")
+        self.archive.unlink()
+        result = self.setup_sparkle()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_installed()
+        self.assertFalse(backup.exists())
+
 
 if __name__ == "__main__":
     unittest.main()
