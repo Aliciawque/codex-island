@@ -11,6 +11,7 @@ LOCK_DIR="${DEST}.lock"
 MAX_ATTEMPTS=3
 STAGING=""
 LOCK_HELD=""
+LOCK_WAIT_LIMIT=300
 
 cleanup() {
   if [[ -n "$STAGING" ]]; then
@@ -24,14 +25,32 @@ trap cleanup EXIT
 
 mkdir -p "$(dirname "$DEST")"
 
-# Serialize concurrent runs. A run killed mid-flight leaves the lock behind,
-# but then its pid is gone too, so a stale lock is safe to drop.
+lock_owner_alive() {
+  local pid
+  [[ -f "$LOCK_DIR/pid" ]] || return 0
+  pid=$(cat "$LOCK_DIR/pid" 2>/dev/null) || return 0
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 0
+  kill -0 "$pid" 2>/dev/null
+}
+
+# Unknown owners may still be writing their pid. Only one waiter can reap
+# a dead owner, so a second waiter cannot remove a newly acquired lock.
+lock_waits=0
 while ! mkdir "$LOCK_DIR" 2>/dev/null; do
-  if [[ -f "$LOCK_DIR/pid" ]] && ! kill -0 "$(cat "$LOCK_DIR/pid")" 2>/dev/null; then
-    rm -rf "$LOCK_DIR"
+  if (( lock_waits >= LOCK_WAIT_LIMIT )); then
+    echo "error: timed out waiting for Sparkle setup lock at ${LOCK_DIR}; if no setup is running, remove that lock and retry" >&2
+    exit 1
+  fi
+  if ! lock_owner_alive && mkdir "$LOCK_DIR/reaper" 2>/dev/null; then
+    if ! lock_owner_alive; then
+      rm -rf "$LOCK_DIR"
+    else
+      rmdir "$LOCK_DIR/reaper"
+    fi
   else
     sleep 0.2
   fi
+  lock_waits=$(( lock_waits + 1 ))
 done
 LOCK_HELD=1
 echo "$$" > "$LOCK_DIR/pid"
@@ -49,13 +68,14 @@ framework_ok() {
 if framework_ok; then
   if [[ -f "${DEST}/.version" ]] && [[ "$(cat "${DEST}/.version")" == "$SPARKLE_VERSION" ]]; then
     echo "Sparkle ${SPARKLE_VERSION} already vendored at ${DEST}"
-  else
+    exit 0
+  elif [[ ! -f "${DEST}/.version" ]]; then
     # Verified legacy cache: stamp the marker instead of re-downloading, so
     # offline builds keep working.
     printf '%s\n' "$SPARKLE_VERSION" > "${DEST}/.version"
     echo "adopted existing Sparkle cache at ${DEST}"
+    exit 0
   fi
-  exit 0
 fi
 
 # A transient network failure should not fail the build outright: retry the

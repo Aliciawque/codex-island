@@ -126,6 +126,67 @@ class SetupSparkleTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_installed()
 
+    def test_cache_for_another_version_is_replaced(self):
+        self.assertEqual(self.setup_sparkle().returncode, 0)
+        (self.dest / ".version").write_text("2.8.0\n", encoding="utf-8")
+        (self.dest / "Sparkle.framework/Sparkle").write_bytes(b"old framework")
+        result = self.setup_sparkle()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_installed()
+        self.assertEqual((self.dest / ".version").read_text().strip(), "2.9.1")
+        self.assertEqual(len(self.downloads.read_text().splitlines()), 2)
+
+    def test_failed_version_update_preserves_existing_cache(self):
+        self.assertEqual(self.setup_sparkle().returncode, 0)
+        (self.dest / ".version").write_text("2.8.0\n", encoding="utf-8")
+        (self.dest / "Sparkle.framework/Sparkle").write_bytes(b"old framework")
+        self.archive.unlink()
+        result = self.setup_sparkle()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual((self.dest / ".version").read_text().strip(), "2.8.0")
+        self.assertEqual((self.dest / "Sparkle.framework/Sparkle").read_bytes(), b"old framework")
+
+    def test_lock_without_owner_cannot_wait_forever(self):
+        lock = self.root / "Vendor/Sparkle.lock"
+        lock.mkdir(parents=True)
+        sleep = self.fake_bin / "sleep"
+        sleep.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        sleep.chmod(0o755)
+        result = self.setup_sparkle()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("timed out waiting for Sparkle setup lock", result.stderr)
+        self.assertTrue(lock.is_dir())
+        self.assertFalse(self.downloads.exists())
+
+    def test_dead_owner_lock_is_recovered(self):
+        lock = self.root / "Vendor/Sparkle.lock"
+        lock.mkdir(parents=True)
+        (lock / "pid").write_text("99999999\n", encoding="utf-8")
+        result = self.setup_sparkle()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_installed()
+        self.assertFalse(lock.exists())
+
+    def test_concurrent_waiters_recover_one_dead_owner_lock(self):
+        lock = self.root / "Vendor/Sparkle.lock"
+        lock.mkdir(parents=True)
+        (lock / "pid").write_text("99999999\n", encoding="utf-8")
+        results = []
+        barrier = threading.Barrier(3)
+        def run():
+            barrier.wait()
+            results.append(self.setup_sparkle())
+        threads = [threading.Thread(target=run) for _ in range(3)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(len(results), 3)
+        for result in results:
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_installed()
+        self.assertEqual(self.downloads.read_text().splitlines(), ["download"])
+
 
 if __name__ == "__main__":
     unittest.main()
