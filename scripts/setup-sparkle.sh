@@ -103,7 +103,9 @@ while (( attempt <= MAX_ATTEMPTS )); do
     break
   fi
   echo "warning: download/extraction failed (attempt ${attempt}/${MAX_ATTEMPTS})" >&2
-  sleep $(( 1 << (attempt - 1) ))
+  if (( attempt < MAX_ATTEMPTS )); then
+    sleep $(( 1 << (attempt - 1) ))
+  fi
   attempt=$(( attempt + 1 ))
 done
 if (( attempt > MAX_ATTEMPTS )); then
