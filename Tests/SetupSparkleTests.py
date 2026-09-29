@@ -1,6 +1,7 @@
 import io
 import lzma
 import os
+import plistlib
 from pathlib import Path
 import shutil
 import subprocess
@@ -99,6 +100,7 @@ class SetupSparkleTests(unittest.TestCase):
         self.assert_installed()
         self.assertEqual(count.read_text(encoding="utf-8"), "3")
 
+    @unittest.skipUnless(Path("/usr/libexec/PlistBuddy").is_file(), "legacy version check uses macOS PlistBuddy")
     def test_verified_legacy_cache_is_adopted_without_downloading(self):
         (self.dest / "Sparkle.framework").mkdir(parents=True)
         (self.dest / "Sparkle.framework/Sparkle").write_bytes(b"legacy framework")
@@ -107,6 +109,9 @@ class SetupSparkleTests(unittest.TestCase):
         sign_update = bin_dir / "sign_update"
         sign_update.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         sign_update.chmod(0o755)
+        resources = self.dest / "Sparkle.framework/Resources"
+        resources.mkdir()
+        (resources / "Info.plist").write_bytes(plistlib.dumps({"CFBundleShortVersionString": "2.9.1"}))
         self.archive.unlink()
         result = self.setup_sparkle()
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -134,6 +139,27 @@ class SetupSparkleTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_installed()
         self.assertEqual((self.dest / ".version").read_text().strip(), "2.9.1")
+        self.assertEqual(len(self.downloads.read_text().splitlines()), 2)
+
+    def test_unmarked_cache_without_version_metadata_is_replaced(self):
+        self.assertEqual(self.setup_sparkle().returncode, 0)
+        (self.dest / ".version").unlink()
+        (self.dest / "Sparkle.framework/Sparkle").write_bytes(b"unverified framework")
+        result = self.setup_sparkle()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_installed()
+        self.assertEqual(len(self.downloads.read_text().splitlines()), 2)
+
+    def test_unmarked_cache_with_old_framework_version_is_replaced(self):
+        self.assertEqual(self.setup_sparkle().returncode, 0)
+        (self.dest / ".version").unlink()
+        resources = self.dest / "Sparkle.framework/Resources"
+        resources.mkdir()
+        (resources / "Info.plist").write_bytes(plistlib.dumps({"CFBundleShortVersionString": "2.8.0"}))
+        (self.dest / "Sparkle.framework/Sparkle").write_bytes(b"old framework")
+        result = self.setup_sparkle()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_installed()
         self.assertEqual(len(self.downloads.read_text().splitlines()), 2)
 
     def test_failed_version_update_preserves_existing_cache(self):

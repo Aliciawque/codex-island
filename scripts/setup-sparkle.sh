@@ -70,11 +70,13 @@ if framework_ok; then
     echo "Sparkle ${SPARKLE_VERSION} already vendored at ${DEST}"
     exit 0
   elif [[ ! -f "${DEST}/.version" ]]; then
-    # Verified legacy cache: stamp the marker instead of re-downloading, so
-    # offline builds keep working.
-    printf '%s\n' "$SPARKLE_VERSION" > "${DEST}/.version"
-    echo "adopted existing Sparkle cache at ${DEST}"
-    exit 0
+    legacy_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
+      "${DEST}/Sparkle.framework/Resources/Info.plist" 2>/dev/null || true)
+    if [[ "$legacy_version" == "$SPARKLE_VERSION" ]]; then
+      printf '%s\n' "$SPARKLE_VERSION" > "${DEST}/.version"
+      echo "adopted existing Sparkle cache at ${DEST}"
+      exit 0
+    fi
   fi
 fi
 
